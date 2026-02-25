@@ -1,44 +1,35 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, sum, regexp_replace, to_date
+from pyspark.sql.functions import col
+from pyspark.sql.functions.builtin import desc
 
-spark = SparkSession.builder \
-    .appName("ChocolateSalesPartitioning") \
-    .getOrCreate()
+# Pyspark set up
+pyspark = SparkSession.builder.appName("Anime").getOrCreate()
 
-file_path = "Chocolate Sales (2).csv"
-df = spark.read.csv(file_path, header=True, inferSchema=True)
+print("---------------------------------------------------------------------------------------------------------")
+# read from csv file
+animes = pyspark.read.csv("anime.csv", header=True, inferSchema=True)
 
-df_clean = df.withColumn("Amount_Clean", regexp_replace(col("Amount"), r"[\$,]", "").cast("float")) \
-             .withColumn("Date_Clean", to_date(col("Date"), "dd/MM/yyyy"))
+# Partition animes into 4 parts
+animes_hash_part = animes.repartition(4)
+################################
 
-print("--- Strategy 1: Repartition by Number ---")
-df_hash_part = df_clean.repartition(4) 
-print(f"Number of partitions: {df_hash_part.rdd.getNumPartitions()}")
+anime_types = [ row.type for row in animes_hash_part.select("type").distinct().collect()]
+print(anime_types)
 
-print("Pipeline 1 Results (Canada Sales Summary by Product):")
-pipeline_1 = df_hash_part \
-    .filter(col("Country") == "Canada") \
-    .groupBy("Product") \
-    .agg(sum("Amount_Clean").alias("Total_Sales"), sum("Boxes Shipped").alias("Total_Boxes")) \
-    .orderBy(col("Total_Sales").desc())
+for anime_type in anime_types:
+  filtered_anime = animes_hash_part.filter(col("type") == anime_type).orderBy(col('name'))
+  filtered_anime.write.mode('overwrite').csv(f"Anime/{anime_type}", header=True)
 
-pipeline_1.show(truncate=False)
+# range partitioning by rating
+anime_range_part = animes.repartitionByRange(4, 'rating')
+top_100_anime = anime_range_part.orderBy(desc('rating')).limit(100)
+top_100_anime.write.mode('overwrite').csv("Top Anime")
+top_100_anime.show(n=100, truncate=False)
 
-print("\n--- Strategy 2: Repartition by Column ---")
-df_col_part = df_clean.repartition("Country")
 
-print("Pipeline 2 Results (2024 Top Salesperson per Country):")
-pipeline_2 = df_col_part \
-    .filter(col("Date_Clean") >= "2024-01-01") \
-    .groupBy("Country", "Sales Person") \
-    .agg(sum("Amount_Clean").alias("Total_Sales")) \
-    .orderBy(col("Country").asc(), col("Total_Sales").desc())
+# filt_anime.show()
+# animes.show(n=100)
 
-pipeline_2.show(truncate=False)
-
-print("\n--- Writing Partitioned Data to Disk ---")
-output_path = "partitioned_chocolate_sales"
-
-df_clean.write.partitionBy("Country").mode("overwrite").csv(output_path, header=True)
-
-print(f"Success! Partitioned data has been saved to the '{output_path}' folder.")
+#[x] group by type
+# filter top 1-200
+#
